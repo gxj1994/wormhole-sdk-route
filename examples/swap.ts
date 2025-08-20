@@ -29,10 +29,6 @@ import { getStuff } from "./utils";
   // Create a new Wormhole route resolver, adding the Mayan route to the default list
   const resolver = wh.resolver([MayanRoute]);
 
-  // Show supported tokens
-  const srcTokens = await resolver.supportedSourceTokens(sendChain);
-  console.log(srcTokens.slice(0, 5));
-
   const dstTokens = await resolver.supportedDestinationTokens(
     source,
     sendChain,

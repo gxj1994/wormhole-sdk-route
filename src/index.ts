@@ -9,12 +9,6 @@ import {
   getSwapFromEvmTxPayload,
 } from '@mayanfinance/swap-sdk';
 import {
-  generateFetchQuoteUrl as generateFetchQuoteUrlTestnet,
-  createSwapFromSolanaInstructions as createSwapFromSolanaInstructionsTestnet,
-  createSwapFromSuiMoveCalls as createSwapFromSuiMoveCallsTestnet,
-  getSwapFromEvmTxPayload as getSwapFromEvmTxPayloadTestnet,
-} from '@testnet-mayan/swap-sdk';
-import {
   Chain,
   ChainAddress,
   ChainContext,
@@ -55,11 +49,11 @@ import {
 } from '@wormhole-foundation/sdk-sui';
 import axios from 'axios';
 import {
+  fetchTokensForChain,
   getNativeContractAddress,
   getTransactionStatus,
   supportedChains,
   toMayanChainName,
-  isTestnetSupportedChain,
   txStatusToReceipt,
 } from './utils';
 import {
@@ -134,21 +128,6 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
 
   protocols: MayanProtocol[] = ['WH', 'MCTP', 'SWIFT', 'MONO_CHAIN'];
 
-  protected isTestnetRequest(request: routes.RouteTransferRequest<N>): boolean {
-    // A request is considered testnet if either the source or destination chain is on testnet
-    return (
-      request.fromChain.network === 'Testnet' ||
-      request.toChain.network === 'Testnet'
-    );
-  }
-
-  // Helper function to normalize quote for testnet compatibility
-  protected normalizeQuoteForTestnet(quote: MayanQuote): any {
-    // Remove properties that don't exist in testnet SDK
-    const { hyperCoreParams, ...testnetCompatibleQuote } = quote;
-    return testnetCompatibleQuote;
-  }
-
   getDefaultOptions(): Op {
     return {
       gasDrop: 0,
@@ -158,7 +137,7 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
   }
 
   static supportedNetworks(): Network[] {
-    return ['Mainnet', 'Testnet'];
+    return ['Mainnet'];
   }
 
   static supportedChains(network: Network): Chain[] {
@@ -169,7 +148,7 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
   static async supportedSourceTokens(
     _fromChain: ChainContext<Network>,
   ): Promise<TokenId[]> {
-    return [];
+    return await fetchTokensForChain(_fromChain.chain);
   }
 
   static isProtocolSupported<N extends Network>(
@@ -184,7 +163,7 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
     _fromChain: ChainContext<N>,
     _toChain: ChainContext<N>,
   ): Promise<TokenId[]> {
-    return [];
+    return await fetchTokensForChain(_toChain.chain);
   }
 
   async isAvailable(): Promise<boolean> {
@@ -449,35 +428,14 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
   ): Promise<MayanQuote | undefined> {
     const { fromChain, toChain } = request;
 
-    if (this.isTestnetRequest(request)) {
-      if (!isTestnetSupportedChain(fromChain.chain)) {
-        throw new Error(
-          `Chain ${
-            fromChain.chain
-          } is not supported on testnet. Supported testnet chains: ${supportedChains(
-            'Testnet',
-          ).join(', ')}`,
-        );
-      }
-      if (!isTestnetSupportedChain(toChain.chain)) {
-        throw new Error(
-          `Chain ${
-            toChain.chain
-          } is not supported on testnet. Supported testnet chains: ${supportedChains(
-            'Testnet',
-          ).join(', ')}`,
-        );
-      }
-    }
-
     const quoteParams: QuoteParams = {
       amountIn64: this.getQuoteAmountIn64(request, params.amount),
       fromToken: this.toMayanAddress(request.source.id),
       toToken: this.toMayanAddress(request.destination.id),
       /* @ts-ignore */
-      fromChain: toMayanChainName(fromChain.network, fromChain.chain),
+      fromChain: toMayanChainName(fromChain.chain),
       /* @ts-ignore */
-      toChain: toMayanChainName(toChain.network, toChain.chain),
+      toChain: toMayanChainName(toChain.chain),
       ...this.getDefaultOptions(),
       ...params.options,
       slippageBps: 'auto',
@@ -498,20 +456,7 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
       monoChain: this.protocols.includes('MONO_CHAIN'),
     };
 
-    const fetchQuoteUrl = new URL(
-      this.isTestnetRequest(request)
-        ? generateFetchQuoteUrlTestnet(
-            {
-              ...quoteParams,
-              /* @ts-ignore */
-              fromChain: toMayanChainName(fromChain.network, fromChain.chain),
-              /* @ts-ignore */
-              toChain: toMayanChainName(toChain.network, toChain.chain),
-            },
-            quoteOpts,
-          )
-        : generateFetchQuoteUrl(quoteParams, quoteOpts),
-    );
+    const fetchQuoteUrl = new URL(generateFetchQuoteUrl(quoteParams, quoteOpts));
     if (!fetchQuoteUrl) {
       throw new Error('Unable to generate fetch quote URL');
     }
@@ -702,23 +647,14 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
 
       if (request.fromChain.chain === 'Solana') {
         const { instructions, signers, lookupTables } =
-          await (this.isTestnetRequest(request)
-            ? createSwapFromSolanaInstructionsTestnet(
-                this.normalizeQuoteForTestnet(quote.details!),
-                originAddress,
-                destinationAddress,
-                null,
-                rpc,
-                { allowSwapperOffCurve: true },
-              )
-            : createSwapFromSolanaInstructions(
-                quote.details!,
-                originAddress,
-                destinationAddress,
-                isNewReferralEnabled ? null : referrerAddress,
-                rpc,
-                { allowSwapperOffCurve: true },
-              ));
+          await (createSwapFromSolanaInstructions(
+            quote.details!,
+            originAddress,
+            destinationAddress,
+            isNewReferralEnabled ? null : referrerAddress,
+            rpc,
+            { allowSwapperOffCurve: true },
+          ));
 
         const payerKey = new PublicKey(originAddress);
 
@@ -781,29 +717,20 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
         const options: ComposableSuiMoveCallsOptions | undefined =
           builtTransaction
             ? {
-                builtTransaction,
-                inputCoin: { result: remainingAmountCoin },
-              }
+              builtTransaction,
+              inputCoin: { result: remainingAmountCoin },
+            }
             : undefined;
 
-        const tx = await (this.isTestnetRequest(request)
-          ? createSwapFromSuiMoveCallsTestnet(
-              this.normalizeQuoteForTestnet(quote.details!),
-              originAddress,
-              destinationAddress,
-              null,
-              undefined,
-              rpc,
-            )
-          : createSwapFromSuiMoveCalls(
-              quote.details!,
-              originAddress,
-              destinationAddress,
-              isNewReferralEnabled ? null : referrerAddress,
-              undefined,
-              rpc,
-              options,
-            ));
+        const tx = await (createSwapFromSuiMoveCalls(
+          quote.details!,
+          originAddress,
+          destinationAddress,
+          isNewReferralEnabled ? null : referrerAddress,
+          undefined,
+          rpc,
+          options,
+        ));
 
         const txReqs = [
           new SuiUnsignedTransaction(
@@ -888,27 +815,16 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
           }
         }
 
-        const mayanTxRequest = this.isTestnetRequest(request)
-          ? getSwapFromEvmTxPayloadTestnet(
-              this.normalizeQuoteForTestnet(quote.details!),
-              originAddress,
-              destinationAddress,
-              null,
-              originAddress,
-              Number(nativeChainId!),
-              undefined,
-              undefined, // permit?
-            )
-          : getSwapFromEvmTxPayload(
-              quote.details!,
-              originAddress,
-              destinationAddress,
-              isNewReferralEnabled ? null : referrerAddress,
-              originAddress,
-              Number(nativeChainId!),
-              undefined,
-              undefined, // permit?
-            );
+        const mayanTxRequest = getSwapFromEvmTxPayload(
+          quote.details!,
+          originAddress,
+          destinationAddress,
+          isNewReferralEnabled ? null : referrerAddress,
+          originAddress,
+          Number(nativeChainId!),
+          undefined,
+          undefined, // permit?
+        );
 
         const txReq = createTransactionRequest(
           request.fromChain.network,
@@ -1051,20 +967,19 @@ class MayanRouteBase<N extends Network> extends routes.AutomaticRoute<
 
     return isReferralEnabled
       ? {
-          referrer: referrers.Solana, // Mayan referrer system expects solana
-          referrerBps: getReferrerBps(request),
-          isNewEvmReferralEnabled,
-          isNewSolanaReferralEnabled,
-          isNewSuiReferralEnabled,
-        }
+        referrer: referrers.Solana, // Mayan referrer system expects solana
+        referrerBps: getReferrerBps(request),
+        isNewEvmReferralEnabled,
+        isNewSolanaReferralEnabled,
+        isNewSuiReferralEnabled,
+      }
       : {};
   }
 }
 
 export class MayanRoute<N extends Network>
   extends MayanRouteBase<N>
-  implements routes.StaticRouteMethods<typeof MayanRoute>
-{
+  implements routes.StaticRouteMethods<typeof MayanRoute> {
   static meta = {
     name: 'MayanSwap',
     provider: 'Mayan',
@@ -1075,8 +990,7 @@ export class MayanRoute<N extends Network>
 
 export class MayanRouteSWIFT<N extends Network>
   extends MayanRouteBase<N>
-  implements routes.StaticRouteMethods<typeof MayanRouteSWIFT>
-{
+  implements routes.StaticRouteMethods<typeof MayanRouteSWIFT> {
   static meta = {
     name: 'MayanSwapSWIFT',
     provider: 'Mayan Swift',
@@ -1087,8 +1001,7 @@ export class MayanRouteSWIFT<N extends Network>
 
 export class MayanRouteMCTP<N extends Network>
   extends MayanRouteBase<N>
-  implements routes.StaticRouteMethods<typeof MayanRouteMCTP>
-{
+  implements routes.StaticRouteMethods<typeof MayanRouteMCTP> {
   static meta = {
     name: 'MayanSwapMCTP',
     provider: 'Mayan MCTP',
@@ -1099,8 +1012,7 @@ export class MayanRouteMCTP<N extends Network>
 
 export class MayanRouteWH<N extends Network>
   extends MayanRouteBase<N>
-  implements routes.StaticRouteMethods<typeof MayanRouteWH>
-{
+  implements routes.StaticRouteMethods<typeof MayanRouteWH> {
   static meta = {
     name: 'MayanSwapWH',
     provider: 'Mayan',
@@ -1111,8 +1023,7 @@ export class MayanRouteWH<N extends Network>
 
 export class MayanRouteMONOCHAIN<N extends Network>
   extends MayanRouteBase<N>
-  implements routes.StaticRouteMethods<typeof MayanRouteMONOCHAIN>
-{
+  implements routes.StaticRouteMethods<typeof MayanRouteMONOCHAIN> {
   static meta = {
     name: 'MayanSwapMONOCHAIN',
     provider: 'Mayan Mono Chain',
@@ -1130,11 +1041,11 @@ export class MayanRouteMONOCHAIN<N extends Network>
 export function createMayanRouteWithReferrerFee<
   N extends Network,
   T extends
-    | typeof MayanRoute<N>
-    | typeof MayanRouteSWIFT<N>
-    | typeof MayanRouteMCTP<N>
-    | typeof MayanRouteWH<N>
-    | typeof MayanRouteMONOCHAIN<N>,
+  | typeof MayanRoute<N>
+  | typeof MayanRouteSWIFT<N>
+  | typeof MayanRouteMCTP<N>
+  | typeof MayanRouteWH<N>
+  | typeof MayanRouteMONOCHAIN<N>,
 >(
   classConstructor: T,
   properties: ReferrerParams<N> = {},
