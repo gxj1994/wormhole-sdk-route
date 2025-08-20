@@ -65,4 +65,3 @@ export async function readCacheTokens() {
     fs.readFileSync(filePath, { encoding: 'utf-8' })
   );
 }
-cacheTokens();

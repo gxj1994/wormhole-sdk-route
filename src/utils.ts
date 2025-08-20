@@ -32,7 +32,7 @@ import { isEvmNativeSigner } from "@wormhole-foundation/sdk-evm";
 import { SolanaUnsignedTransaction } from "@wormhole-foundation/sdk-solana";
 import axios from "axios";
 import { ethers } from "ethers";
-import { readCacheTokens } from "../scripts/cache_tokens";
+import { readCacheTokens } from "./cache";
 export function getNativeContractAddress(chain: Chain): string {
   if (chain === "Sui") return "0x2::sui::SUI";
   return "0x0000000000000000000000000000000000000000";
